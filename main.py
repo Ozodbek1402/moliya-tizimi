@@ -1,51 +1,30 @@
 from fastapi import FastAPI, Request
 import psycopg2
 import os
+import requests
 
 app = FastAPI()
 
-# Bazaga ulanish URL manzili (Buni Render'da sozlaymiz)
+# Sozlamalar
 DATABASE_URL = os.getenv("DATABASE_URL")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+    return psycopg2.connect(DATABASE_URL)
 
-# Tizim ishga tushganda jadvallarni yaratish
+def send_telegram_msg(chat_id, text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    requests.post(url, json=payload)
+
 @app.on_event("startup")
 def startup_event():
     conn = get_db_connection()
     cur = conn.cursor()
-    
-    # 1. Mahsulotlar jadvali
-    cur.execute('''CREATE TABLE IF NOT EXISTS products (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        cost_price NUMERIC DEFAULT 0,
-        sell_price NUMERIC DEFAULT 0,
-        stock INTEGER DEFAULT 0
-    )''')
-    
-    # 2. Buyurtmalar jadvali
-    cur.execute('''CREATE TABLE IF NOT EXISTS orders (
-        id SERIAL PRIMARY KEY,
-        amo_id INTEGER UNIQUE,
-        product_id INTEGER REFERENCES products(id),
-        status TEXT,
-        amount NUMERIC,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-    
-    # 3. Kirim-Chiqim (Tranzaksiyalar) jadvali
-    cur.execute('''CREATE TABLE IF NOT EXISTS transactions (
-        id SERIAL PRIMARY KEY,
-        amount NUMERIC,
-        type TEXT, 
-        category TEXT, 
-        description TEXT,
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''')
-
+    # Jadvallar
+    cur.execute('''CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY, name TEXT, cost_price NUMERIC, sell_price NUMERIC, stock INTEGER DEFAULT 0)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, amo_id INTEGER, product_id INTEGER, status TEXT, amount NUMERIC, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS transactions (id SERIAL PRIMARY KEY, amount NUMERIC, type TEXT, category TEXT, description TEXT, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     cur.close()
     conn.close()
@@ -54,9 +33,29 @@ def startup_event():
 def home():
     return {"status": "Moliya tizimi onlayn", "message": "Xush kelibsiz!"}
 
-# AmoCRM Webhook qabul qiluvchi qism
+# --- TELEGRAM WEBHOOK ---
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+
+        if text == "/start":
+            msg = ("Salom! Moliya tizimi botiga xush kelibsiz.\n\n"
+                   "💰 /kassa - Hozirgi pul holati\n"
+                   "📦 /ombor - Tovar qoldiqlari\n"
+                   "📉 /rashod - Chiqim kiritish")
+            send_telegram_msg(chat_id, msg)
+        
+        elif text == "/kassa":
+            send_telegram_msg(chat_id, "Hisob-kitob qilinmoqda... Hozircha kassa 0 so'm.")
+
+    return {"status": "ok"}
+
+# --- AMOCRM WEBHOOK ---
 @app.post("/webhook/amocrm")
 async def amocrm_webhook(request: Request):
-    data = await request.form()
-    print("AmoCRM ma'lumoti keldi:", data)
+    # Bu yerga AmoCRM dan ma'lumot kelganda xabar beradi
+    # ADMIN_ID ni o'rniga o'zingizni chat_id yuboramiz (Start bosganingizda logsda ko'rinadi)
     return {"status": "qabul qilindi"}
